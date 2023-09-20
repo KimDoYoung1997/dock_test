@@ -1,0 +1,26 @@
+#IncludeRegexLine: ^[ 	]*[#%][ 	]*(include|import)[ 	]*[<"]([^">]+)([">])
+
+#IncludeRegexScan: ^.*$
+
+#IncludeRegexComplain: ^$
+
+#IncludeRegexTransform: 
+
+/root/laser_extract/src/laser_line_extraction/include/laser_line_extraction/line.h
+vector
+-
+boost/array.hpp
+-
+laser_line_extraction/utilities.h
+/root/laser_extract/src/laser_line_extraction/include/laser_line_extraction/laser_line_extraction/utilities.h
+
+/root/laser_extract/src/laser_line_extraction/include/laser_line_extraction/utilities.h
+vector
+-
+cmath
+-
+
+/root/laser_extract/src/laser_line_extraction/src/line.cpp
+laser_line_extraction/line.h
+/root/laser_extract/src/laser_line_extraction/src/laser_line_extraction/line.h
+

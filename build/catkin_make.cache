@@ -1,0 +1,2 @@
+laser_line_extraction
+-DCATKIN_DEVEL_PREFIX=/root/laser_extract/devel -DCMAKE_INSTALL_PREFIX=/root/laser_extract/install -G Unix Makefiles

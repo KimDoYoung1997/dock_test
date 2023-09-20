@@ -1,0 +1,158 @@
+#!/usr/bin/env python
+
+import rospy
+from laser_line_extraction.msg import LineSegmentList
+from laser_line_extraction.srv import GetGoalPose, GetGoalPoseResponse
+from geometry_msgs.msg import PoseStamped
+from nav_msgs.msg import Odometry
+import numpy as np
+from tf.transformations import quaternion_from_euler
+from ModeController import ModeControllerClass
+
+from ModeController import ModeControllerClass
+class LineSegmentListener:
+    def __init__(self):
+        rospy.init_node('line_segments_listener', anonymous=True)
+        self.initialize_variables()
+        self.initialize_ros_entities()
+        self.mode_controller = ModeControllerClass()
+        print(self.mode_controller.control_dict[self.mode_controller.mode])
+        rospy.spin()
+
+    def initialize_variables(self):
+        self.current_x = 0.0
+        self.current_y = 0.0
+        self.current_orientation = []
+        self.latest_data = None
+        self.goal_published = False
+        self.middle_points_list = []  # List to collect middle points
+        self.previous_average_middle_point = None  # Variable to store the previous average middle point
+        self.angle_to_use_for_orientation = 0.0  # Variable to store the angle to be used for orientation
+
+    def initialize_ros_entities(self):
+        rospy.Subscriber("/line_segments", LineSegmentList, self.line_segments_callback)
+        rospy.Subscriber("/TE2318999/odometry/filtered", Odometry, self.odometry_callback)
+        self.goal_pose_publisher = rospy.Publisher('/TE2318999/move_base_simple/goal', PoseStamped, queue_size=10)
+        rospy.Service('get_goal_pose', GetGoalPose, self.handle_get_goal_pose) # Server receives service type request 
+
+    def find_valid_radius_pairs(self, radius_angle_list, data_num):
+        RACK_WIDTH_RANGE = (0.65, 0.75) # width size  = 0.7 (m)
+        ANGLE_SUM_RANGE = (3.0, 3.3) # pi = 3.14
+
+        valid_pairs = [
+            (data_num, i, j+i+1, [radius1, angle1, start1, end1], [radius2, angle2, start2, end2]) 
+            for i, (radius1, angle1, start1, end1) in enumerate(radius_angle_list) 
+            for j, (radius2, angle2, start2, end2) in enumerate(radius_angle_list[i+1:]) 
+            if (RACK_WIDTH_RANGE[0] < radius1 + radius2 < RACK_WIDTH_RANGE[1]) and (ANGLE_SUM_RANGE[0] < abs(angle1) + abs(angle2) < ANGLE_SUM_RANGE[1])
+        ]
+
+
+
+        return valid_pairs
+
+
+
+    # ... (continuing from the previous section)
+
+    def handle_get_goal_pose(self, req):
+        # Service handler function
+        PRE_GOAL_OFFSET = -0.45  # m
+        response = GetGoalPoseResponse()
+        
+        # Calculate the average middle point using the newly defined method
+        average_middle_point = self.calculate_average_middle_point()
+        
+        # If no average middle point could be calculated, return failure
+        if average_middle_point is None:
+            return GetGoalPoseResponse(success=False)
+        
+        # Preparing the response
+        response.pose.header.stamp = rospy.Time.now()
+        response.pose.header.frame_id = "TE2318999/laser"
+        response.pose.pose.position.x = average_middle_point[0] - PRE_GOAL_OFFSET * np.cos(np.radians(self.angle_to_use_for_orientation))
+        response.pose.pose.position.y = average_middle_point[1] - PRE_GOAL_OFFSET * np.sin(np.radians(self.angle_to_use_for_orientation))
+        
+        # Converting the angle in degrees to radians and then to quaternion
+        quaternion = quaternion_from_euler(0, 0, np.radians(self.angle_to_use_for_orientation))
+        
+        response.pose.pose.orientation.x = quaternion[0]
+        response.pose.pose.orientation.y = quaternion[1]
+        response.pose.pose.orientation.z = quaternion[2]
+        response.pose.pose.orientation.w = quaternion[3]
+
+        response.success = True
+
+        # Publishing the goal pose to the topic for visualization in RViz
+        self.goal_pose_publisher.publish(response.pose)
+        
+        return response
+
+
+    def line_segments_callback(self, data):
+        # Callback function to process line segments and find valid radius pairs
+        data_num = data.header.seq
+        data_time = data.header.stamp.secs
+        radius_angle_list = [(segment.radius, segment.angle, segment.start, segment.end) for segment in data.line_segments]
+        self.latest_data = [data_num, radius_angle_list]
+
+        valid_pairs = self.find_valid_radius_pairs(radius_angle_list, data_num)
+    
+
+        
+        if valid_pairs: # if there is valid radius pairs,
+            self.angle_to_use_for_orientation = np.degrees((valid_pairs[0][3][1] + valid_pairs[0][4][1]) / 2) # goal orientation
+            for pair in valid_pairs:
+                self.print_valid_radius_pair_info(pair)
+                self.update_middle_points_list(pair)
+
+            service_client = rospy.ServiceProxy('/get_goal_pose', GetGoalPose)
+            rospy.wait_for_service('/get_goal_pose', timeout=5.0)  # Wait for the service to be available
+            if not self.goal_published:
+                try:
+                    response = service_client()
+                    rospy.loginfo("Service call succeeded with response: %s", response)
+                    self.goal_published = False
+                except rospy.ServiceException as e:
+                    rospy.logerr("Service call failed: %s", e)
+                    self.goal_published = False
+
+
+        else:
+            self.middle_points_list = []
+            self.previous_average_middle_point = None
+
+    def print_valid_radius_pair_info(self, pair):
+        # Helper function to print information about a valid radius pair
+        print(f"In seq {pair[0]}, the segment {pair[1]} has:")
+        print(f"    Radius: {pair[3][0]}, Angle: {pair[3][1]}")
+        print(f"    Start coordinates: {pair[3][2]}, End coordinates: {pair[3][3]}")
+        print(f"And the segment {pair[2]} has:")
+        print(f"    Radius: {pair[4][0]}, Angle: {pair[4][1]}")
+        print(f"    Start coordinates: {pair[4][2]}, End coordinates: {pair[4][3]}\n")
+
+    def update_middle_points_list(self, pair):
+        # Helper function to update the list of middle points based on a valid radius pair
+        middle_points = list((np.array(pair[3][2]) + np.array(pair[3][3]) + np.array(pair[4][2]) + np.array(pair[4][3])) / 4)
+        self.middle_points_list.append(middle_points)
+
+    def calculate_average_middle_point(self):
+        MIN_MIDDLE_POINTS = 5
+        if len(self.middle_points_list) >= MIN_MIDDLE_POINTS:
+            average_middle_point = np.mean(self.middle_points_list, axis=0)
+            self.previous_average_middle_point = average_middle_point
+            self.middle_points_list = []
+            return average_middle_point
+        elif self.previous_average_middle_point is not None:
+            return self.previous_average_middle_point
+        else:
+            return None
+
+        
+    def odometry_callback(self, data):
+        # Callback function to update current position and orientation
+        self.current_x = data.pose.pose.position.x
+        self.current_y = data.pose.pose.position.y
+        self.current_orientation = data.pose.pose.orientation
+
+#if __name__ == '__main__':
+#    LineSegmentListener()
